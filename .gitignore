@@ -22,3 +22,10 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+
+# emacs savefiles
+*~
+
+# compiled binary name
+gmap_notifier

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"github.com/gmap-notifier/gmap_notifier/config"
 	"log"
 	"net/mail"
 	"os"
@@ -14,44 +15,52 @@ import (
 	"github.com/mxk/go-imap/imap"
 )
 
+var gmapConfig = &config.Config{}
+
 var curMsgCount uint32 = 0
-var folder = "INBOX"
-var user = "#####"
-var domain = "@gmail.com"
-var imapServer = "imap.gmail.com:993"
-var password = "#####"
+
+func init() {
+	if err := gmapConfig.ReadConfig(); err != nil {
+		log.Fatalf("Config error: %v", err)
+	}
+}
 
 func main() {
 	imap.DefaultLogger = log.New(os.Stdout, "", 0)
 	imap.DefaultLogMask = imap.LogConn | imap.LogRaw
 
-	c := Dial(imapServer)
-	defer func() {
-		ReportOK(c.Unsubscribe(folder))
-		ReportOK(c.Logout(30 * time.Second))
-	}()
+	for _, a := range gmapConfig.Accounts {
+		c := Dial(a.Server())
+		defer func() {
+			// ReportOK(c.Unsubscribe(folder))
+			ReportOK(c.Logout(30 * time.Second))
+		}()
 
-	if c.Caps["STARTTLS"] {
-		ReportOK(c.StartTLS(nil))
-	}
-
-	if c.Caps["ID"] {
-		ReportOK(c.ID("name", "goimap"))
-	}
-	ReportOK(c.Noop())
-	ReportOK(Login(c, user+domain, password))
-	if c.Caps["QUOTA"] {
-		ReportOK(c.GetQuotaRoot("INBOX"))
-	}
-
-	ReportOK(c.Subscribe(folder))
-	cmd := ReportOK(c.Select(folder, true))
-	for _, rsp := range cmd.Data {
-		if rsp.Label == "EXISTS" {
-			curMsgCount = rsp.Fields[0].(uint32)
+		if a.UseSSL && c.Caps["STARTTLS"] {
+			ReportOK(c.StartTLS(nil))
 		}
+
+		if c.Caps["ID"] {
+			ReportOK(c.ID("name", "goimap"))
+		}
+		ReportOK(c.Noop())
+		ReportOK(Login(c, a.UserName(), a.Password))
+		if c.Caps["QUOTA"] {
+			ReportOK(c.GetQuotaRoot("INBOX"))
+		}
+
+		for _, folder := range a.Folders {
+			ReportOK(c.Subscribe(folder.Name))
+			cmd := ReportOK(c.Select(folder.Name, true))
+			for _, rsp := range cmd.Data {
+				if rsp.Label == "EXISTS" {
+					folder.MsgCount = rsp.Fields[0].(uint32)
+				}
+			}
+		}
+
+		kickOffWatcher(c)
 	}
-	kickOffWatcher(c)
 }
 
 func kickOffWatcher(c *imap.Client) {
